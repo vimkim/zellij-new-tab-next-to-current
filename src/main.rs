@@ -70,7 +70,8 @@ impl ZellijPlugin for State {
             EventType::PermissionRequestResult,
             EventType::Timer,
         ]);
-        hide_self();
+        // Don't hide_self() here — wait until permissions are granted,
+        // otherwise the permission prompt is never visible to the user.
     }
 
     fn pipe(&mut self, pipe_message: PipeMessage) -> bool {
@@ -143,6 +144,7 @@ impl ZellijPlugin for State {
                 match status {
                     PermissionStatus::Granted => {
                         self.permissions_granted = true;
+                        hide_self();
                         eprintln!("[new-tab-right] Permissions granted");
                     }
                     PermissionStatus::Denied => {
