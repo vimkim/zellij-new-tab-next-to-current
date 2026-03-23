@@ -1,0 +1,8 @@
+[package]
+name = "zellij-new-tab-next-to-current"
+version = "0.1.0"
+edition = "2021"
+description = "Zellij plugin that creates new tabs next to the current tab"
+
+[dependencies]
+zellij-tile = "0.43"
