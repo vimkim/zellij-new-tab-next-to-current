@@ -70,6 +70,7 @@ impl ZellijPlugin for State {
             EventType::PermissionRequestResult,
             EventType::Timer,
         ]);
+        hide_self();
     }
 
     fn pipe(&mut self, pipe_message: PipeMessage) -> bool {
