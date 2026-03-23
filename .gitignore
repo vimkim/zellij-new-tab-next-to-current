@@ -1,2 +1,4 @@
-.omc
+.omc/*
+!.omc/plans/
 .claude
+target
