@@ -2,6 +2,11 @@
 //
 // Add this snippet to your ~/.config/zellij/config.kdl
 //
+// Pre-load the plugin at startup (runs in background, no visible pane)
+load_plugins {
+    "file:~/.config/zellij/plugins/zellij-new-tab-next-to-current.wasm"
+}
+
 // Option 1: KDL keybinding (no CWD inheritance — new tab gets session default CWD)
 // This works from any context, including non-terminal panes.
 keybinds {
@@ -9,6 +14,7 @@ keybinds {
         bind "Alt n" {
             MessagePlugin "file:~/.config/zellij/plugins/zellij-new-tab-next-to-current.wasm" {
                 name "new-tab-right"
+                launch_new false
             }
         }
     }

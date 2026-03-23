@@ -41,18 +41,24 @@ install -m 644 target/wasm32-wasip1/release/zellij-new-tab-next-to-current.wasm 
 Add to your `~/.config/zellij/config.kdl`:
 
 ```kdl
+// Pre-load the plugin at startup (runs in background, no visible pane)
+load_plugins {
+    "file:~/.config/zellij/plugins/zellij-new-tab-next-to-current.wasm"
+}
+
 keybinds {
     shared_except "locked" {
         bind "Alt n" {
             MessagePlugin "file:~/.config/zellij/plugins/zellij-new-tab-next-to-current.wasm" {
                 name "new-tab-right"
+                launch_new false
             }
         }
     }
 }
 ```
 
-Restart Zellij. The first time you press **Alt+n**, Zellij will ask you to grant plugin permissions — click **Grant**.
+Restart Zellij. On first launch, Zellij will ask you to grant plugin permissions — click **Grant**.
 
 ### CWD Inheritance
 
