@@ -1,5 +1,7 @@
 # zellij-new-tab-next-to-current
 
+> **Actively maintained** — I use this plugin every day. If something doesn't work, please [open an issue](https://github.com/vimkim/zellij-new-tab-next-to-current/issues) and I'll respond quickly.
+
 A [Zellij](https://zellij.dev/) plugin that opens new tabs **next to the current tab** instead of at the end.
 
 ## The Problem
