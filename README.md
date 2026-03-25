@@ -89,8 +89,10 @@ Since the Zellij plugin API doesn't expose a `move_tab()` function, the plugin s
 
 ## Requirements
 
-- Zellij 0.43+
+- **Zellij 0.44+**
 - Rust (stable) with `wasm32-wasip1` target
+
+> **Version matching:** The `zellij-tile` crate version must match your installed Zellij version. This plugin currently uses `zellij-tile = "0.44"`. If you're running an older Zellij (e.g., 0.43), edit `Cargo.toml` to pin `zellij-tile` to your version and rebuild.
 
 ## License
 
