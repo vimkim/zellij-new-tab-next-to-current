@@ -66,7 +66,11 @@ Restart Zellij. On first launch, Zellij will ask you to grant plugin permissions
 
 ### CWD Inheritance
 
-The KDL keybinding creates the new tab with Zellij's session default working directory. If you want the new tab to **inherit the current pane's working directory**, add this shell function to your `~/.bashrc` or `~/.zshrc`:
+The KDL keybinding creates the new tab with Zellij's session default working directory. If you want the new tab to **inherit the current pane's working directory**, you can use a shell function that pipes `$PWD` to the plugin.
+
+> **Note:** I use **Nushell** daily and CWD inheritance worked out of the box. The Bash/Zsh example below was AI-generated and **not tested** — if it doesn't work, please [open an issue](https://github.com/vimkim/zellij-new-tab-next-to-current/issues).
+
+#### Bash (`~/.bashrc`) / Zsh (`~/.zshrc`)
 
 ```bash
 new-tab-right() {
