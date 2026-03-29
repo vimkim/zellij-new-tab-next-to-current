@@ -3,10 +3,6 @@ use zellij_tile::prelude::*;
 
 const PIPE_NAME: &str = "new-tab-right";
 const TIMEOUT_WAITING: f64 = 5.0;
-const TIMEOUT_MOVING: f64 = 10.0;
-const CONTEXT_ACTION_KEY: &str = "action";
-const CONTEXT_ACTION_VALUE: &str = "move-tab-left";
-const CONTEXT_SEQ_KEY: &str = "seq";
 
 enum PluginState {
     Idle,
@@ -14,18 +10,12 @@ enum PluginState {
         target_position: usize,
         tab_count_before: usize,
     },
-    MovingTab {
-        moves_remaining: usize,
-        move_seq: usize,
-        tab_count: usize,
-    },
 }
 
 #[derive(Default)]
 struct State {
     tabs: Vec<TabInfo>,
     plugin_state: Option<PluginState>,
-    seq_counter: usize,
     permissions_granted: bool,
 }
 
@@ -44,15 +34,13 @@ impl State {
         self.plugin_state = Some(PluginState::Idle);
     }
 
-    fn issue_move_left(&mut self) {
-        let mut ctx = BTreeMap::new();
-        ctx.insert(CONTEXT_ACTION_KEY.to_string(), CONTEXT_ACTION_VALUE.to_string());
-        ctx.insert(CONTEXT_SEQ_KEY.to_string(), self.seq_counter.to_string());
-        self.seq_counter += 1;
-        run_command(
-            &["zellij", "action", "move-tab", "left"],
-            ctx,
-        );
+    fn move_tab_left_n(&self, n: usize) {
+        let action = actions::Action::MoveTab {
+            direction: Direction::Left,
+        };
+        for _ in 0..n {
+            run_action(action.clone(), BTreeMap::new());
+        }
     }
 }
 
@@ -62,11 +50,10 @@ impl ZellijPlugin for State {
         request_permission(&[
             PermissionType::ReadApplicationState,
             PermissionType::ChangeApplicationState,
-            PermissionType::RunCommands,
+            PermissionType::RunActionsAsUser,
         ]);
         subscribe(&[
             EventType::TabUpdate,
-            EventType::RunCommandResult,
             EventType::PermissionRequestResult,
             EventType::Timer,
         ]);
@@ -151,7 +138,7 @@ impl ZellijPlugin for State {
                         self.permissions_granted = false;
                         eprintln!(
                             "[new-tab-right] Permissions denied. Plugin requires \
-                             ReadApplicationState, ChangeApplicationState, and RunCommands."
+                             ReadApplicationState, ChangeApplicationState, and RunActionsAsUser."
                         );
                     }
                 }
@@ -172,7 +159,6 @@ impl ZellijPlugin for State {
                                 "[new-tab-right] TabUpdate received but tab count didn't increase ({} <= {}). Waiting...",
                                 self.tabs.len(), tab_count_before
                             );
-                            // Put state back — might be a spurious TabUpdate
                             self.plugin_state = Some(PluginState::WaitingForNewTab {
                                 target_position,
                                 tab_count_before,
@@ -196,7 +182,6 @@ impl ZellijPlugin for State {
                             new_tab_position, target_position
                         );
 
-                        // Guard against underflow
                         if new_tab_position < target_position {
                             eprintln!(
                                 "[new-tab-right] ERROR: new tab position ({}) < target position ({}). Aborting.",
@@ -210,44 +195,13 @@ impl ZellijPlugin for State {
 
                         if moves_needed == 0 {
                             eprintln!("[new-tab-right] No moves needed. Done.");
-                            self.to_idle();
-                            return false;
+                        } else {
+                            eprintln!("[new-tab-right] Moving {} position(s) left via run_action", moves_needed);
+                            self.move_tab_left_n(moves_needed);
+                            eprintln!("[new-tab-right] All moves dispatched. Done.");
                         }
 
-                        eprintln!("[new-tab-right] Need {} move(s) left", moves_needed);
-
-                        // Transition to MovingTab
-                        self.plugin_state = Some(PluginState::MovingTab {
-                            moves_remaining: moves_needed,
-                            move_seq: 0,
-                            tab_count: self.tabs.len(),
-                        });
-
-                        set_timeout(TIMEOUT_MOVING);
-                        self.issue_move_left();
-                        false
-                    }
-
-                    PluginState::MovingTab {
-                        moves_remaining,
-                        move_seq,
-                        tab_count,
-                    } => {
-                        // Check if tab count dropped (a tab was closed during move)
-                        if self.tabs.len() < tab_count {
-                            eprintln!(
-                                "[new-tab-right] Tab count dropped ({} < {}) during move. Aborting.",
-                                self.tabs.len(), tab_count
-                            );
-                            self.to_idle();
-                            return false;
-                        }
-                        // Otherwise keep the state — we're waiting for RunCommandResult
-                        self.plugin_state = Some(PluginState::MovingTab {
-                            moves_remaining,
-                            move_seq,
-                            tab_count,
-                        });
+                        self.to_idle();
                         false
                     }
 
@@ -258,73 +212,12 @@ impl ZellijPlugin for State {
                 }
             }
 
-            Event::RunCommandResult(exit_code, _stdout, stderr, context) => {
-                // Verify this is our move-tab command
-                if context.get(CONTEXT_ACTION_KEY).map(|s| s.as_str()) != Some(CONTEXT_ACTION_VALUE)
-                {
-                    return false;
-                }
-
-                match self.plugin_state.take().unwrap_or(PluginState::Idle) {
-                    PluginState::MovingTab {
-                        moves_remaining,
-                        move_seq,
-                        tab_count,
-                    } => {
-                        if exit_code != Some(0) {
-                            let err = String::from_utf8_lossy(&stderr);
-                            eprintln!(
-                                "[new-tab-right] move-tab failed (exit {:?}): {}. Aborting.",
-                                exit_code, err
-                            );
-                            self.to_idle();
-                            return false;
-                        }
-
-                        let remaining = moves_remaining.saturating_sub(1);
-                        eprintln!(
-                            "[new-tab-right] Move {} complete, {} remaining",
-                            move_seq, remaining
-                        );
-
-                        if remaining == 0 {
-                            eprintln!("[new-tab-right] All moves complete. Done.");
-                            self.to_idle();
-                        } else {
-                            self.plugin_state = Some(PluginState::MovingTab {
-                                moves_remaining: remaining,
-                                move_seq: move_seq + 1,
-                                tab_count,
-                            });
-                            self.issue_move_left();
-                        }
-                        false
-                    }
-                    other => {
-                        // Not in MovingTab — ignore stale result
-                        self.plugin_state = Some(other);
-                        false
-                    }
-                }
-            }
-
             Event::Timer(_) => {
-                match self.current_state() {
-                    PluginState::WaitingForNewTab { .. } => {
-                        eprintln!(
-                            "[new-tab-right] Timed out waiting for TabUpdate after new_tab(). Aborting."
-                        );
-                        self.to_idle();
-                    }
-                    PluginState::MovingTab { .. } => {
-                        eprintln!(
-                            "[new-tab-right] Timed out waiting for move-tab to complete. Aborting."
-                        );
-                        self.to_idle();
-                    }
-                    PluginState::Idle => {
-                        // Stale timer from a completed operation — ignore
-                    }
+                if let PluginState::WaitingForNewTab { .. } = self.current_state() {
+                    eprintln!(
+                        "[new-tab-right] Timed out waiting for TabUpdate after new_tab(). Aborting."
+                    );
+                    self.to_idle();
                 }
                 false
             }

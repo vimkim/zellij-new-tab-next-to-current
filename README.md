@@ -1,6 +1,6 @@
 # zellij-new-tab-next-to-current
 
-> **⚠️ If the plugin doesn't work or feels super slow, it's likely due to the latest Zellij 0.44 update.** The current `zellij-tile` crate may not be fully compatible with your Zellij version. Make sure you upgrade Zellij to the latest release to avoid issues.
+> **Upgraded for Zellij 0.44** — Tab moves are now instant via `run_action()` instead of shelling out. See [docs/patch-0.44.md](docs/patch-0.44.md) for details.
 
 > **Actively maintained** — I use this plugin every day. If something doesn't work, please [open an issue](https://github.com/vimkim/zellij-new-tab-next-to-current/issues) and I'll respond quickly.
 
@@ -85,13 +85,12 @@ Then type `new-tab-right` in your shell (or bind it to a terminal key).
 
 ## How It Works
 
-The plugin uses a 3-state state machine:
+The plugin uses a 2-state state machine:
 
 1. **Idle** — waiting for trigger
 2. **WaitingForNewTab** — `new_tab()` called, waiting for `TabUpdate` event to detect the new tab's position
-3. **MovingTab** — issuing `zellij action move-tab left` commands (via `run_command`) to reposition the tab
 
-Since the Zellij plugin API doesn't expose a `move_tab()` function, the plugin shells out to the Zellij CLI to move tabs. Each move waits for confirmation before issuing the next.
+Once the new tab is detected, the plugin dispatches `Action::MoveTab { direction: Left }` via `run_action()` in a tight loop to reposition the tab instantly. This uses Zellij's in-process plugin API (no subprocess spawning).
 
 ## Requirements
 
