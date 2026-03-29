@@ -1,6 +1,6 @@
 # zellij-new-tab-next-to-current
 
-> **Upgraded for Zellij 0.44** — Tab moves are now instant via `run_action()` instead of shelling out. See [docs/patch-0.44.md](docs/patch-0.44.md) for details.
+> **⚠️ Zellij 0.44 required.** This plugin now uses `run_action()` for instant tab moves. If you were using a previous version, pull the latest changes and rebuild (`just bi`). See [docs/patch-0.44.md](docs/patch-0.44.md) for details.
 
 > **Actively maintained** — I use this plugin every day. If something doesn't work, please [open an issue](https://github.com/vimkim/zellij-new-tab-next-to-current/issues) and I'll respond quickly.
 
