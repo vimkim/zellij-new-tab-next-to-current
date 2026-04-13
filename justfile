@@ -1,6 +1,12 @@
+set shell := ["bash", "-cu"]
+
 default_target := "wasm32-wasip1"
 plugin_name := "zellij-new-tab-next-to-current"
-install_dir := env("HOME") / ".config/zellij/plugins"
+install_dir := if os() == "windows" {
+    env("APPDATA") / "zellij/plugins"
+} else {
+    env("HOME") / ".config/zellij/plugins"
+}
 
 # Build the plugin in release mode
 build:
@@ -10,10 +16,10 @@ build:
 build-debug:
     cargo build
 
-# Install the plugin to ~/.config/zellij/plugins/
+# Install the plugin to the zellij plugins directory
 install: build
     mkdir -p {{ install_dir }}
-    install -m 644 target/{{ default_target }}/release/{{ plugin_name }}.wasm {{ install_dir }}/{{ plugin_name }}.wasm
+    cp target/{{ default_target }}/release/{{ plugin_name }}.wasm {{ install_dir }}/{{ plugin_name }}.wasm
     @echo "Installed to {{ install_dir }}/{{ plugin_name }}.wasm"
     @echo "Restart Zellij to load the updated plugin."
 
