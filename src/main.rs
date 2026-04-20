@@ -1,8 +1,68 @@
 use std::collections::BTreeMap;
+use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
 use zellij_tile::prelude::*;
 
 const PIPE_NAME: &str = "new-tab-right";
 const TIMEOUT_WAITING: f64 = 5.0;
+
+// Cross-instance coordination: zellij can end up with multiple "ghost" plugin
+// instances after reattach cycles. MessagePlugin broadcasts to all of them,
+// and each runs its own state machine, producing duplicate tabs.
+//
+// We coordinate via two files on the host FS (zellij maps the session CWD to
+// /host). Both files are best-effort — if the FS is not writable, we degrade
+// to the old (duplicating) behavior.
+//
+//   <HEARTBEAT_PATH>  — latest TabUpdate timestamp seen by any live instance.
+//                       A ghost that stopped receiving events has a stale local
+//                       timestamp and can detect itself by comparing.
+//   <LOCK_PATH>       — most recent "I handled this trigger" stamp. Instances
+//                       that see a fresh lock (< LOCK_TTL_MS old) bow out.
+const HEARTBEAT_FILE: &str = ".zellij-ntr-heartbeat";
+const LOCK_FILE: &str = ".zellij-ntr-lock";
+const GHOST_TOLERANCE_MS: u128 = 500;
+const LOCK_TTL_MS: u128 = 1000;
+
+fn now_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+fn session_suffix() -> String {
+    std::env::var("ZELLIJ_SESSION_NAME").unwrap_or_else(|_| "default".to_string())
+}
+
+fn heartbeat_path() -> String {
+    format!("/host/{}-{}", HEARTBEAT_FILE, session_suffix())
+}
+
+fn lock_path() -> String {
+    format!("/host/{}-{}", LOCK_FILE, session_suffix())
+}
+
+fn read_stamp(path: &str) -> u128 {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u128>().ok())
+        .unwrap_or(0)
+}
+
+fn write_stamp(path: &str, ms: u128) -> bool {
+    fs::write(path, ms.to_string()).is_ok()
+}
+
+/// Try to claim the current trigger. Returns true if we won, false if another
+/// instance already claimed within LOCK_TTL_MS.
+fn try_claim_trigger(now: u128) -> bool {
+    let prev = read_stamp(&lock_path());
+    if now.saturating_sub(prev) < LOCK_TTL_MS {
+        return false;
+    }
+    write_stamp(&lock_path(), now)
+}
 
 enum PluginState {
     Idle,
@@ -17,6 +77,10 @@ struct State {
     tabs: Vec<TabInfo>,
     plugin_state: Option<PluginState>,
     permissions_granted: bool,
+    // Timestamp (ms since epoch) of the most recent TabUpdate this instance
+    // saw. Ghosts that stopped receiving events leave this frozen while the
+    // shared heartbeat on disk keeps advancing.
+    last_tabupdate_ms: u128,
 }
 
 register_plugin!(State);
@@ -47,6 +111,9 @@ impl State {
 impl ZellijPlugin for State {
     fn load(&mut self, _configuration: BTreeMap<String, String>) {
         self.plugin_state = Some(PluginState::Idle);
+        // Seed with load time so a freshly-loaded instance isn't wrongly
+        // classified as a ghost before its first TabUpdate arrives.
+        self.last_tabupdate_ms = now_ms();
         request_permission(&[
             PermissionType::ReadApplicationState,
             PermissionType::ChangeApplicationState,
@@ -75,6 +142,28 @@ impl ZellijPlugin for State {
 
         if !self.permissions_granted {
             eprintln!("[new-tab-right] Permissions not yet granted. Please grant permissions when prompted.");
+            return false;
+        }
+
+        // Ghost detection: if the shared heartbeat is much newer than my last
+        // TabUpdate, another instance is receiving events that I'm not — I'm
+        // a ghost from a previous client attach. Bow out.
+        let shared_heartbeat = read_stamp(&heartbeat_path());
+        if shared_heartbeat > self.last_tabupdate_ms.saturating_add(GHOST_TOLERANCE_MS) {
+            eprintln!(
+                "[new-tab-right] Ghost instance detected (mine={}ms, shared={}ms, lag={}ms). Aborting.",
+                self.last_tabupdate_ms,
+                shared_heartbeat,
+                shared_heartbeat.saturating_sub(self.last_tabupdate_ms)
+            );
+            return false;
+        }
+
+        // Cross-instance trigger lock: even among fresh instances, only one
+        // should process a given pipe.
+        let now = now_ms();
+        if !try_claim_trigger(now) {
+            eprintln!("[new-tab-right] Another instance already claimed this trigger. Aborting.");
             return false;
         }
 
@@ -147,6 +236,10 @@ impl ZellijPlugin for State {
 
             Event::TabUpdate(tabs) => {
                 self.tabs = tabs;
+                // Advance both local and shared heartbeat so ghosts can detect
+                // they've fallen behind.
+                self.last_tabupdate_ms = now_ms();
+                write_stamp(&heartbeat_path(), self.last_tabupdate_ms);
 
                 match self.plugin_state.take().unwrap_or(PluginState::Idle) {
                     PluginState::WaitingForNewTab {
