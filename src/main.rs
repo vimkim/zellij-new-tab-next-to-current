@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use zellij_new_tab_next_to_current::{marker_path, sanitize_session_name};
 use zellij_tile::prelude::*;
 
 const PIPE_NAME: &str = "new-tab-right";
@@ -10,17 +12,19 @@ const TIMEOUT_WAITING: f64 = 5.0;
 // instances after reattach cycles. MessagePlugin broadcasts to all of them,
 // and each runs its own state machine, producing duplicate tabs.
 //
-// We coordinate via two files on the host FS (zellij maps the session CWD to
-// /host). Both files are best-effort — if the FS is not writable, we degrade
-// to the old (duplicating) behavior.
+// We coordinate via two files in the plugin's /data directory. Zellij shares
+// /data between all loaded instances of a plugin, so the files remain stable
+// when the focused terminal's cwd (and therefore /host) changes. Both files
+// are best-effort — if the FS is not writable, we degrade to the old
+// (duplicating) behavior.
 //
 //   <HEARTBEAT_PATH>  — latest TabUpdate timestamp seen by any live instance.
 //                       A ghost that stopped receiving events has a stale local
 //                       timestamp and can detect itself by comparing.
 //   <LOCK_PATH>       — most recent "I handled this trigger" stamp. Instances
 //                       that see a fresh lock (< LOCK_TTL_MS old) bow out.
-const HEARTBEAT_FILE: &str = ".zellij-ntr-heartbeat";
-const LOCK_FILE: &str = ".zellij-ntr-lock";
+const HEARTBEAT_FILE: &str = "heartbeat";
+const LOCK_FILE: &str = "lock";
 const GHOST_TOLERANCE_MS: u128 = 500;
 const LOCK_TTL_MS: u128 = 1000;
 
@@ -32,26 +36,53 @@ fn now_ms() -> u128 {
 }
 
 fn session_suffix() -> String {
-    std::env::var("ZELLIJ_SESSION_NAME").unwrap_or_else(|_| "default".to_string())
+    let session_name = std::env::var("ZELLIJ_SESSION_NAME").unwrap_or_default();
+    sanitize_session_name(&session_name)
 }
 
-fn heartbeat_path() -> String {
-    format!("/host/{}-{}", HEARTBEAT_FILE, session_suffix())
+fn heartbeat_path() -> PathBuf {
+    marker_path(HEARTBEAT_FILE, &session_suffix())
 }
 
-fn lock_path() -> String {
-    format!("/host/{}-{}", LOCK_FILE, session_suffix())
+fn lock_path() -> PathBuf {
+    marker_path(LOCK_FILE, &session_suffix())
 }
 
-fn read_stamp(path: &str) -> u128 {
+fn read_stamp(path: &Path) -> u128 {
     fs::read_to_string(path)
         .ok()
         .and_then(|s| s.trim().parse::<u128>().ok())
         .unwrap_or(0)
 }
 
-fn write_stamp(path: &str, ms: u128) -> bool {
-    fs::write(path, ms.to_string()).is_ok()
+fn write_stamp(path: &Path, ms: u128) -> bool {
+    let Some(parent) = path.parent() else {
+        eprintln!(
+            "[new-tab-right] Cannot determine marker directory for {}",
+            path.display()
+        );
+        return false;
+    };
+
+    if let Err(error) = fs::create_dir_all(parent) {
+        eprintln!(
+            "[new-tab-right] Cannot create marker directory {}: {}. Cross-instance coordination is degraded.",
+            parent.display(),
+            error
+        );
+        return false;
+    }
+
+    if let Err(error) = fs::write(path, ms.to_string()) {
+        eprintln!(
+            "[new-tab-right] Cannot write marker file {}: {}. Cross-instance coordination is degraded.",
+            path.display(),
+            error
+        );
+        return false;
+    }
+
+    true
 }
 
 /// Try to claim the current trigger. Returns true if we won, false if another
@@ -61,7 +92,10 @@ fn try_claim_trigger(now: u128) -> bool {
     if now.saturating_sub(prev) < LOCK_TTL_MS {
         return false;
     }
-    write_stamp(&lock_path(), now)
+    // Keep the user-facing action working if coordination storage is
+    // unavailable. Multiple instances may then process the same trigger.
+    write_stamp(&lock_path(), now);
+    true
 }
 
 enum PluginState {
@@ -195,10 +229,7 @@ impl ZellijPlugin for State {
         set_timeout(TIMEOUT_WAITING);
 
         // Create new tab with CWD from payload if provided
-        let cwd = pipe_message
-            .payload
-            .as_deref()
-            .filter(|s| !s.is_empty());
+        let cwd = pipe_message.payload.as_deref().filter(|s| !s.is_empty());
 
         match cwd {
             Some(cwd_path) => {
@@ -263,7 +294,9 @@ impl ZellijPlugin for State {
                         let focused = match self.tabs.iter().find(|t| t.active) {
                             Some(tab) => tab,
                             None => {
-                                eprintln!("[new-tab-right] No focused tab after new_tab(). Aborting.");
+                                eprintln!(
+                                    "[new-tab-right] No focused tab after new_tab(). Aborting."
+                                );
                                 self.to_idle();
                                 return false;
                             }
@@ -289,7 +322,10 @@ impl ZellijPlugin for State {
                         if moves_needed == 0 {
                             eprintln!("[new-tab-right] No moves needed. Done.");
                         } else {
-                            eprintln!("[new-tab-right] Moving {} position(s) left via run_action", moves_needed);
+                            eprintln!(
+                                "[new-tab-right] Moving {} position(s) left via run_action",
+                                moves_needed
+                            );
                             self.move_tab_left_n(moves_needed);
                             eprintln!("[new-tab-right] All moves dispatched. Done.");
                         }
